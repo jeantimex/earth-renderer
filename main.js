@@ -8,7 +8,7 @@ let scene, camera, renderer, globe;
 // Camera parameters
 const params = {
   tiltAngle: 70, // degrees (0 = top-down, 90 = horizontal)
-  distanceFromTower: 800, // meters (3D distance from Tokyo Tower)
+  distanceFromCenter: 800, // meters (3D distance from target center)
 };
 
 function init() {
@@ -45,14 +45,11 @@ function init() {
   // Setup GUI controls
   setupGUI();
 
-  // Position camera at Tokyo Tower (controls are disabled, so this won't be disrupted)
-  globe.positionCameraAtTarget(params.distanceFromTower, params.tiltAngle);
+  // Position camera at target center (controls are disabled, so this won't be disrupted)
+  globe.positionCameraAtTarget(params.distanceFromCenter, params.tiltAngle);
 
   // Handle window resize
   window.addEventListener('resize', onWindowResize, false);
-
-  // Update stats
-  updateStats();
 }
 
 function setupGUI() {
@@ -61,21 +58,21 @@ function setupGUI() {
 
   const cameraFolder = gui.addFolder('Camera Settings');
 
-  const distanceController = cameraFolder.add(params, 'distanceFromTower', 200, 6500000, 1000)
+  const distanceController = cameraFolder.add(params, 'distanceFromCenter', 200, 6500000, 1000)
     .name('Distance (m)')
     .onChange(() => {
       // Automatically set tilt to 0 (top-down) when viewing from far distance
-      if (params.distanceFromTower > 200000) {
+      if (params.distanceFromCenter > 200000) {
         params.tiltAngle = 0;
         tiltController.updateDisplay();
       }
-      globe.positionCameraAtTarget(params.distanceFromTower, params.tiltAngle);
+      globe.positionCameraAtTarget(params.distanceFromCenter, params.tiltAngle);
     });
 
   const tiltController = cameraFolder.add(params, 'tiltAngle', 0, 90, 1)
     .name('Tilt Angle (°)')
     .onChange(() => {
-      globe.positionCameraAtTarget(params.distanceFromTower, params.tiltAngle);
+      globe.positionCameraAtTarget(params.distanceFromCenter, params.tiltAngle);
     });
 
   cameraFolder.open();
@@ -88,18 +85,6 @@ function onWindowResize() {
   renderer.setPixelRatio(window.devicePixelRatio);
 }
 
-function updateStats() {
-  if (!globe) return;
-
-  const stats = globe.getStats();
-  const statsDiv = document.getElementById('stats');
-  statsDiv.innerHTML = `
-    Downloading: ${stats.downloading}
-    Parsing: ${stats.parsing}
-    Visible: ${globe.getVisibleTilesCount()}
-  `;
-}
-
 function animate() {
   requestAnimationFrame(animate);
 
@@ -110,11 +95,6 @@ function animate() {
 
   // Render scene
   renderer.render(scene, camera);
-
-  // Update stats periodically
-  if (Math.random() < 0.01) {
-    updateStats();
-  }
 }
 
 // Start the application

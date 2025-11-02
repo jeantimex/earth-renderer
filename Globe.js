@@ -20,10 +20,10 @@ export class Globe {
     this.renderer = renderer;
     this.apiKey = apiKey;
 
-    // Tokyo Tower coordinates
+    // Target center coordinates (Tokyo Tower by default)
     this.targetLat = 35.6586; // degrees
     this.targetLon = 139.7454; // degrees
-    this.towerHeight = 333; // meters
+    this.centerHeight = 333; // meters
 
     // Control activation tracking
     this._initialInteractionPerformed = false;
@@ -108,20 +108,20 @@ export class Globe {
   }
 
   /**
-   * Position camera to look at Tokyo Tower
-   * @param {number} distanceFromTower - 3D distance from Tokyo Tower in meters
+   * Position camera to look at target center
+   * @param {number} distanceFromCenter - 3D distance from target center in meters
    * @param {number} tiltAngle - Camera tilt angle (0° = top-down, 90° = horizontal)
    */
-  positionCameraAtTarget(distanceFromTower, tiltAngle) {
+  positionCameraAtTarget(distanceFromCenter, tiltAngle) {
     // Update tiles group matrix world so we can use it
     this.tiles.group.updateMatrixWorld();
 
-    // Calculate Tokyo Tower's position at the middle
+    // Calculate target center's position
     const targetPosition = new Vector3();
     WGS84_ELLIPSOID.getCartographicToPosition(
       this.targetLat * MathUtils.DEG2RAD,
       this.targetLon * MathUtils.DEG2RAD,
-      this.towerHeight / 2, // Middle of the tower
+      this.centerHeight / 2, // Middle of the target
       targetPosition
     );
     targetPosition.applyMatrix4(this.tiles.group.matrixWorld);
@@ -134,11 +134,11 @@ export class Globe {
 
     // Calculate camera position based on distance and tilt angle
     // Using spherical coordinates: distance, elevation angle
-    const cameraDistance = distanceFromTower * Math.cos(elevationRad); // horizontal distance
-    const verticalDistance = distanceFromTower * Math.sin(elevationRad); // vertical distance
-    const cameraHeight = (this.towerHeight / 2) + verticalDistance;
+    const cameraDistance = distanceFromCenter * Math.cos(elevationRad); // horizontal distance
+    const verticalDistance = distanceFromCenter * Math.sin(elevationRad); // vertical distance
+    const cameraHeight = (this.centerHeight / 2) + verticalDistance;
 
-    // Offset the latitude to position camera south of the tower
+    // Offset the latitude to position camera south of the target
     // Approximate: 1 degree latitude ≈ 111km
     const cameraLat = this.targetLat - (cameraDistance / 111000);
 
@@ -150,7 +150,7 @@ export class Globe {
     );
     this.camera.position.applyMatrix4(this.tiles.group.matrixWorld);
 
-    // Make camera look at Tokyo Tower
+    // Make camera look at target center
     this.camera.lookAt(targetPosition);
     this.camera.updateProjectionMatrix();
   }

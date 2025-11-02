@@ -17,8 +17,15 @@ import {
   Vector3,
 } from 'three';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 
 let scene, camera, renderer, tiles, controls;
+
+// Camera parameters
+const params = {
+  tiltAngle: 70, // degrees (0 = top-down, 90 = horizontal)
+  distanceFromTower: 800, // meters (3D distance from Tokyo Tower)
+};
 
 function init() {
   // Get the API key from environment variable
@@ -80,11 +87,35 @@ function init() {
   // Position camera at Tokyo Tower
   positionCameraAtTokyoTower();
 
+  // Setup GUI controls
+  setupGUI();
+
   // Handle window resize
   window.addEventListener('resize', onWindowResize, false);
 
   // Update stats
   updateStats();
+}
+
+function setupGUI() {
+  const gui = new GUI();
+  gui.width = 300;
+
+  const cameraFolder = gui.addFolder('Camera Settings');
+
+  cameraFolder.add(params, 'distanceFromTower', 200, 5000, 50)
+    .name('Distance (m)')
+    .onChange(() => {
+      positionCameraAtTokyoTower();
+    });
+
+  cameraFolder.add(params, 'tiltAngle', 0, 90, 1)
+    .name('Tilt Angle (°)')
+    .onChange(() => {
+      positionCameraAtTokyoTower();
+    });
+
+  cameraFolder.open();
 }
 
 function positionCameraAtTokyoTower() {
@@ -106,10 +137,9 @@ function positionCameraAtTokyoTower() {
   );
   targetPosition.applyMatrix4(tiles.group.matrixWorld);
 
-  // Camera settings
+  // Camera settings from params
   // tiltAngle: 0° = top-down view, 90° = horizontal view
-  const tiltAngle = 70; // degrees (0 = top-down, 90 = horizontal)
-  const distanceFromTower = 800; // meters (3D distance from Tokyo Tower - adjust this to zoom in/out)
+  const { tiltAngle, distanceFromTower } = params;
 
   // Convert tilt to elevation angle from horizontal
   // 0° tilt = 90° elevation (straight down)

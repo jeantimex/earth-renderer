@@ -2,6 +2,8 @@ import './style.css'
 import {
   TilesRenderer,
   GlobeControls,
+  WGS84_ELLIPSOID,
+  CAMERA_FRAME,
 } from '3d-tiles-renderer';
 import {
   GoogleCloudAuthPlugin,
@@ -11,6 +13,8 @@ import {
   Scene,
   WebGLRenderer,
   PerspectiveCamera,
+  MathUtils,
+  Vector3,
 } from 'three';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 
@@ -73,11 +77,67 @@ function init() {
   controls.enableDamping = true;
   controls.setEllipsoid(tiles.ellipsoid, tiles.group);
 
+  // Position camera at Tokyo Tower
+  positionCameraAtTokyoTower();
+
   // Handle window resize
   window.addEventListener('resize', onWindowResize, false);
 
   // Update stats
   updateStats();
+}
+
+function positionCameraAtTokyoTower() {
+  // Tokyo Tower coordinates
+  const lat = 35.6586; // degrees
+  const lon = 139.7454; // degrees
+  const towerHeight = 333; // Tokyo Tower is 333 meters tall
+
+  // Update tiles group matrix world so we can use it
+  tiles.group.updateMatrixWorld();
+
+  // Calculate Tokyo Tower's position at the middle
+  const targetPosition = new Vector3();
+  WGS84_ELLIPSOID.getCartographicToPosition(
+    lat * MathUtils.DEG2RAD,
+    lon * MathUtils.DEG2RAD,
+    towerHeight / 2, // Middle of the tower
+    targetPosition
+  );
+  targetPosition.applyMatrix4(tiles.group.matrixWorld);
+
+  // Camera settings
+  // tiltAngle: 0° = top-down view, 90° = horizontal view
+  const tiltAngle = 70; // degrees (0 = top-down, 90 = horizontal)
+  const distanceFromTower = 800; // meters (3D distance from Tokyo Tower - adjust this to zoom in/out)
+
+  // Convert tilt to elevation angle from horizontal
+  // 0° tilt = 90° elevation (straight down)
+  // 90° tilt = 0° elevation (horizontal)
+  const elevationFromHorizontal = 90 - tiltAngle;
+  const elevationRad = elevationFromHorizontal * MathUtils.DEG2RAD;
+
+  // Calculate camera position based on distance and tilt angle
+  // Using spherical coordinates: distance, elevation angle
+  const cameraDistance = distanceFromTower * Math.cos(elevationRad); // horizontal distance
+  const verticalDistance = distanceFromTower * Math.sin(elevationRad); // vertical distance
+  const cameraHeight = (towerHeight / 2) + verticalDistance;
+
+  // Offset the latitude to position camera south of the tower
+  // Approximate: 1 degree latitude ≈ 111km
+  const cameraLat = lat - (cameraDistance / 111000);
+
+  WGS84_ELLIPSOID.getCartographicToPosition(
+    cameraLat * MathUtils.DEG2RAD,
+    lon * MathUtils.DEG2RAD,
+    cameraHeight,
+    camera.position
+  );
+  camera.position.applyMatrix4(tiles.group.matrixWorld);
+
+  // Make camera look at Tokyo Tower
+  camera.lookAt(targetPosition);
+  camera.updateProjectionMatrix();
 }
 
 function onWindowResize() {

@@ -1,9 +1,11 @@
 import './style.css'
 import { Scene, WebGLRenderer, PerspectiveCamera } from 'three';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
+import { WebGPURenderer } from 'three/webgpu';
 import { Globe } from './Globe.js';
 
 let scene, camera, renderer, globe;
+let rendererLabel = 'WebGL';
 
 // Camera parameters
 const params = {
@@ -11,21 +13,26 @@ const params = {
   distanceFromCenter: 800, // meters (3D distance from target center)
 };
 
-function init() {
+async function init() {
   // Get the API key from environment variable
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   if (!apiKey) {
     console.error('Google Maps API key not found. Please check your .env file.');
-    document.getElementById('stats').innerText = 'Error: API key not found';
     return;
   }
 
-  // Create renderer
-  renderer = new WebGLRenderer({ antialias: true });
+  // Create renderer (prefers WebGPU, falls back to WebGL)
+  renderer = await createRenderer();
+  if (!renderer) {
+    console.error('Failed to initialize renderer.');
+    return;
+  }
   renderer.setClearColor(0x151c1f);
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(window.devicePixelRatio);
+  if (renderer.setPixelRatio) {
+    renderer.setPixelRatio(window.devicePixelRatio);
+  }
   document.body.appendChild(renderer.domElement);
 
   // Create scene
@@ -50,6 +57,27 @@ function init() {
 
   // Handle window resize
   window.addEventListener('resize', onWindowResize, false);
+
+  console.info(`Renderer initialized with ${rendererLabel}.`);
+  return true;
+}
+
+async function createRenderer() {
+  if (await isWebGPUAvailable()) {
+    try {
+      const webgpuRenderer = new WebGPURenderer({ antialias: true });
+      // Match WebGL large-world precision behavior
+      webgpuRenderer.highPrecision = true;
+      await webgpuRenderer.init();
+      rendererLabel = 'WebGPU';
+      return webgpuRenderer;
+    } catch (error) {
+      console.warn('WebGPU initialization failed, falling back to WebGL.', error);
+    }
+  }
+
+  rendererLabel = 'WebGL';
+  return new WebGLRenderer({ antialias: true });
 }
 
 function setupGUI() {
@@ -79,16 +107,33 @@ function setupGUI() {
 }
 
 function onWindowResize() {
+  if (!renderer) return;
+
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(window.devicePixelRatio);
+  if (renderer.setPixelRatio) {
+    renderer.setPixelRatio(window.devicePixelRatio);
+  }
+}
+
+async function isWebGPUAvailable() {
+  if (typeof navigator === 'undefined' || !navigator.gpu) {
+    return false;
+  }
+
+  try {
+    return Boolean(await navigator.gpu.requestAdapter());
+  } catch (error) {
+    console.warn('navigator.gpu.requestAdapter() failed.', error);
+    return false;
+  }
 }
 
 function animate() {
   requestAnimationFrame(animate);
 
-  if (!globe) return;
+  if (!globe || !renderer) return;
 
   // Update globe (controls, camera, tiles)
   globe.update();
@@ -98,5 +143,12 @@ function animate() {
 }
 
 // Start the application
-init();
-animate();
+init()
+  .then((initialized) => {
+    if (initialized) {
+      animate();
+    }
+  })
+  .catch((error) => {
+    console.error('Application initialization failed.', error);
+  });

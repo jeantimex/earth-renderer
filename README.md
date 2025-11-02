@@ -1,1 +1,1 @@
-# earth-renderer
+# Earth Renderer

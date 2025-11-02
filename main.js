@@ -3,8 +3,9 @@ import { Scene, WebGLRenderer, PerspectiveCamera } from 'three';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import { WebGPURenderer } from 'three/webgpu';
 import { Globe } from './Globe.js';
+import Stats from 'stats.js';
 
-let scene, camera, renderer, globe;
+let scene, camera, renderer, globe, stats;
 let rendererLabel = 'WebGL';
 
 // Camera parameters
@@ -37,6 +38,11 @@ async function init() {
 
   // Create scene
   scene = new Scene();
+
+  // Initialize FPS stats overlay
+  stats = new Stats();
+  stats.showPanel(0); // 0: FPS panel
+  document.body.appendChild(stats.dom);
 
   // Create camera
   camera = new PerspectiveCamera(
@@ -135,11 +141,19 @@ function animate() {
 
   if (!globe || !renderer) return;
 
+  if (stats) {
+    stats.begin();
+  }
+
   // Update globe (controls, camera, tiles)
   globe.update();
 
   // Render scene
   renderer.render(scene, camera);
+
+  if (stats) {
+    stats.end();
+  }
 }
 
 // Start the application

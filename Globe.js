@@ -6,6 +6,7 @@ import {
 import {
   GoogleCloudAuthPlugin,
   GLTFExtensionsPlugin,
+  UpdateOnChangePlugin,
 } from '3d-tiles-renderer/plugins';
 import { MathUtils, Vector3 } from 'three';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
@@ -47,6 +48,7 @@ export class Globe {
     this.tiles.registerPlugin(new GLTFExtensionsPlugin({
       dracoLoader: new DRACOLoader().setDecoderPath('https://unpkg.com/three@0.153.0/examples/jsm/libs/draco/gltf/')
     }));
+    this.tiles.registerPlugin(new UpdateOnChangePlugin());
 
     // Rotate the tiles group to align with Three.js coordinate system
     this.tiles.group.rotation.x = -Math.PI / 2;

@@ -3,14 +3,27 @@ import { Scene, WebGLRenderer, PerspectiveCamera } from 'three';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import { Globe } from './Globe.js';
 import Stats from 'stats.js';
+import { loadGoogleMapsApi } from './googleMapsApi.js';
 
 let scene, camera, renderer, globe, stats;
 let rendererLabel = 'WebGL';
+let placesLibrary;
+let routesLibrary;
 
 // Camera parameters
 const params = {
   tiltAngle: 70, // degrees (0 = top-down, 90 = horizontal)
   distanceFromCenter: 800, // meters (3D distance from target center)
+};
+
+const routeParams = {
+  origin: '',
+  destination: '',
+};
+
+const routePlaces = {
+  origin: null,
+  destination: null,
 };
 
 async function init() {
@@ -54,6 +67,8 @@ async function init() {
   // Create globe instance with controls disabled initially
   globe = new Globe(scene, camera, renderer, apiKey, true);
 
+  await initializeGoogleMapsLibraries(apiKey);
+
   // Setup GUI controls
   setupGUI();
 
@@ -72,9 +87,23 @@ async function createRenderer() {
   return new WebGLRenderer({ antialias: true });
 }
 
+async function initializeGoogleMapsLibraries(apiKey) {
+  await loadGoogleMapsApi(apiKey);
+  placesLibrary = await google.maps.importLibrary('places');
+  routesLibrary = await google.maps.importLibrary('routes');
+}
+
 function setupGUI() {
   const gui = new GUI();
-  gui.width = 300;
+  gui.width = 340;
+
+  const routeFolder = gui.addFolder('Route Search');
+  const originController = routeFolder.add(routeParams, 'origin').name('Origin');
+  const destinationController = routeFolder.add(routeParams, 'destination').name('Destination');
+
+  setupPlaceAutocomplete(originController, 'origin');
+  setupPlaceAutocomplete(destinationController, 'destination');
+  routeFolder.open();
 
   const cameraFolder = gui.addFolder('Camera Settings');
 
@@ -96,6 +125,225 @@ function setupGUI() {
     });
 
   cameraFolder.open();
+}
+
+function setupPlaceAutocomplete(controller, fieldName) {
+  const input = controller.domElement.querySelector('input');
+  if (!input || !placesLibrary?.AutocompleteSuggestion) {
+    return;
+  }
+
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  input.placeholder = fieldName === 'origin' ? 'Start typing a place' : 'Choose destination';
+
+  const popup = document.createElement('div');
+  popup.className = 'autocomplete-popup';
+  popup.hidden = true;
+  document.body.appendChild(popup);
+
+  let blurTimer = null;
+  let activeIndex = -1;
+  let requestId = 0;
+  let sessionToken = null;
+  let suggestions = [];
+  let debounceTimer = null;
+
+  const ensureSessionToken = () => {
+    if (!sessionToken) {
+      sessionToken = new placesLibrary.AutocompleteSessionToken();
+    }
+
+    return sessionToken;
+  };
+
+  const positionPopup = () => {
+    const rect = input.getBoundingClientRect();
+    popup.style.left = `${rect.left}px`;
+    popup.style.top = `${rect.bottom + 6}px`;
+    popup.style.width = `${rect.width}px`;
+  };
+
+  const closePopup = () => {
+    popup.hidden = true;
+    popup.replaceChildren();
+    popup.dataset.state = 'idle';
+    activeIndex = -1;
+  };
+
+  const openPopup = () => {
+    if (popup.childElementCount === 0) {
+      return;
+    }
+
+    positionPopup();
+    popup.hidden = false;
+  };
+
+  const setActiveItem = (nextIndex) => {
+    activeIndex = nextIndex;
+    Array.from(popup.children).forEach((element, index) => {
+      element.classList.toggle('active', index === activeIndex);
+    });
+  };
+
+  const clearSelectionIfEditing = () => {
+    const selectedPlace = routePlaces[fieldName];
+    if (!selectedPlace) {
+      return;
+    }
+
+    const selectedLabel = selectedPlace.formattedAddress || selectedPlace.displayName;
+    if (input.value !== selectedLabel) {
+      routePlaces[fieldName] = null;
+    }
+  };
+
+  const getSuggestionPrimaryText = (suggestion) => {
+    return suggestion.placePrediction?.mainText?.text
+      || suggestion.placePrediction?.text?.text
+      || '';
+  };
+
+  const getSuggestionSecondaryText = (suggestion) => {
+    return suggestion.placePrediction?.secondaryText?.text || '';
+  };
+
+  const applyResolvedPlace = async (suggestion) => {
+    const place = suggestion.placePrediction.toPlace();
+    await place.fetchFields({
+      fields: ['displayName', 'formattedAddress', 'location'],
+    });
+
+    routePlaces[fieldName] = place;
+    routeParams[fieldName] = place.formattedAddress || place.displayName || getSuggestionPrimaryText(suggestion);
+    controller.updateDisplay();
+    sessionToken = null;
+    closePopup();
+  };
+
+  const renderSuggestions = () => {
+    popup.replaceChildren();
+
+    suggestions.forEach((suggestion, index) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'autocomplete-item';
+
+      const primary = document.createElement('span');
+      primary.className = 'autocomplete-primary';
+      primary.textContent = getSuggestionPrimaryText(suggestion);
+
+      const secondaryText = getSuggestionSecondaryText(suggestion);
+      item.appendChild(primary);
+
+      if (secondaryText) {
+        const secondary = document.createElement('span');
+        secondary.className = 'autocomplete-secondary';
+        secondary.textContent = secondaryText;
+        item.appendChild(secondary);
+      }
+
+      item.addEventListener('mouseenter', () => setActiveItem(index));
+      item.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        void applyResolvedPlace(suggestion);
+      });
+      popup.appendChild(item);
+    });
+
+    setActiveItem(suggestions.length > 0 ? 0 : -1);
+    openPopup();
+  };
+
+  const fetchSuggestions = async () => {
+    const query = input.value.trim();
+    routeParams[fieldName] = input.value;
+    clearSelectionIfEditing();
+
+    if (query.length < 3) {
+      closePopup();
+      return;
+    }
+
+    const currentRequestId = ++requestId;
+
+    try {
+      const response = await placesLibrary.AutocompleteSuggestion.fetchAutocompleteSuggestions({
+        input: query,
+        language: navigator.language,
+        sessionToken: ensureSessionToken(),
+      });
+
+      if (currentRequestId !== requestId) {
+        return;
+      }
+
+      suggestions = response.suggestions || [];
+      if (suggestions.length === 0) {
+        closePopup();
+        return;
+      }
+
+      renderSuggestions();
+    } catch (error) {
+      console.error(`Failed to fetch autocomplete suggestions for ${fieldName}.`, error);
+      closePopup();
+    }
+  };
+
+  const scheduleFetch = () => {
+    window.clearTimeout(debounceTimer);
+    debounceTimer = window.setTimeout(() => {
+      void fetchSuggestions();
+    }, 250);
+  };
+
+  input.addEventListener('input', scheduleFetch);
+  input.addEventListener('focus', () => {
+    if (popup.childElementCount > 0) {
+      openPopup();
+    }
+  });
+  input.addEventListener('blur', () => {
+    blurTimer = window.setTimeout(closePopup, 120);
+  });
+  input.addEventListener('keydown', (event) => {
+    if (popup.hidden || suggestions.length === 0) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveItem((activeIndex + 1) % suggestions.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveItem((activeIndex - 1 + suggestions.length) % suggestions.length);
+    } else if (event.key === 'Enter') {
+      if (activeIndex < 0) {
+        return;
+      }
+
+      event.preventDefault();
+      void applyResolvedPlace(suggestions[activeIndex]);
+    } else if (event.key === 'Escape') {
+      closePopup();
+    }
+  });
+
+  popup.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+    if (blurTimer) {
+      window.clearTimeout(blurTimer);
+      blurTimer = null;
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    if (!popup.hidden) {
+      positionPopup();
+    }
+  });
 }
 
 function onWindowResize() {

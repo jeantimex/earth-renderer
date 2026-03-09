@@ -61,13 +61,13 @@ export class Globe {
 
   initializeControls(disableControls) {
     // Create globe controls for camera interaction
-    // Pass tiles as 4th parameter - critical for proper globe transformation handling
     this.controls = new GlobeControls(
       this.scene,
       this.camera,
-      this.renderer.domElement,
-      this.tiles
+      this.renderer.domElement
     );
+    this.controls.setScene(this.scene);
+    this.controls.setEllipsoid(this.tiles.ellipsoid, this.tiles.group);
     this.controls.enableDamping = true;
     this.controls.enabled = !disableControls;
 

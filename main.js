@@ -1,7 +1,6 @@
 import './style.css'
 import { Scene, WebGLRenderer, PerspectiveCamera } from 'three';
 import { GUI } from 'three/examples/jsm/libs/lil-gui.module.min.js';
-import { WebGPURenderer } from 'three/webgpu';
 import { Globe } from './Globe.js';
 import Stats from 'stats.js';
 
@@ -69,19 +68,6 @@ async function init() {
 }
 
 async function createRenderer() {
-  if (await isWebGPUAvailable()) {
-    try {
-      const webgpuRenderer = new WebGPURenderer({ antialias: true });
-      // Match WebGL large-world precision behavior
-      webgpuRenderer.highPrecision = true;
-      await webgpuRenderer.init();
-      rendererLabel = 'WebGPU';
-      return webgpuRenderer;
-    } catch (error) {
-      console.warn('WebGPU initialization failed, falling back to WebGL.', error);
-    }
-  }
-
   rendererLabel = 'WebGL';
   return new WebGLRenderer({ antialias: true });
 }
@@ -120,19 +106,6 @@ function onWindowResize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   if (renderer.setPixelRatio) {
     renderer.setPixelRatio(window.devicePixelRatio);
-  }
-}
-
-async function isWebGPUAvailable() {
-  if (typeof navigator === 'undefined' || !navigator.gpu) {
-    return false;
-  }
-
-  try {
-    return Boolean(await navigator.gpu.requestAdapter());
-  } catch (error) {
-    console.warn('navigator.gpu.requestAdapter() failed.', error);
-    return false;
   }
 }
 

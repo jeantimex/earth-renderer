@@ -101,6 +101,9 @@ function setupGUI() {
   const originController = routeFolder.add(routeParams, 'origin').name('Origin');
   const destinationController = routeFolder.add(routeParams, 'destination').name('Destination');
 
+  originController.domElement.classList.add('route-field');
+  destinationController.domElement.classList.add('route-field');
+
   setupPlaceAutocomplete(originController, 'origin');
   setupPlaceAutocomplete(destinationController, 'destination');
   routeFolder.open();
@@ -138,8 +141,7 @@ function setupPlaceAutocomplete(controller, fieldName) {
   input.placeholder = fieldName === 'origin' ? 'Start typing a place' : 'Choose destination';
 
   const popup = document.createElement('div');
-  popup.className = 'autocomplete-popup';
-  popup.hidden = true;
+  popup.className = 'autocomplete-popup is-hidden';
   document.body.appendChild(popup);
 
   let blurTimer = null;
@@ -148,6 +150,7 @@ function setupPlaceAutocomplete(controller, fieldName) {
   let sessionToken = null;
   let suggestions = [];
   let debounceTimer = null;
+  let suppressFetchUntil = 0;
 
   const ensureSessionToken = () => {
     if (!sessionToken) {
@@ -159,25 +162,29 @@ function setupPlaceAutocomplete(controller, fieldName) {
 
   const positionPopup = () => {
     const rect = input.getBoundingClientRect();
-    popup.style.left = `${rect.left}px`;
+    const popupWidth = Math.max(rect.width, 320);
+    const popupLeft = Math.max(12, rect.right - popupWidth);
+
+    popup.style.left = `${popupLeft}px`;
     popup.style.top = `${rect.bottom + 6}px`;
-    popup.style.width = `${rect.width}px`;
+    popup.style.width = `${popupWidth}px`;
   };
 
   const closePopup = () => {
-    popup.hidden = true;
+    popup.classList.add('is-hidden');
     popup.replaceChildren();
     popup.dataset.state = 'idle';
     activeIndex = -1;
+    suggestions = [];
   };
 
   const openPopup = () => {
-    if (popup.childElementCount === 0) {
+    if (popup.childElementCount === 0 || routePlaces[fieldName]) {
       return;
     }
 
     positionPopup();
-    popup.hidden = false;
+    popup.classList.remove('is-hidden');
   };
 
   const setActiveItem = (nextIndex) => {
@@ -199,6 +206,11 @@ function setupPlaceAutocomplete(controller, fieldName) {
     }
   };
 
+  const getSelectedPlaceLabel = () => {
+    const selectedPlace = routePlaces[fieldName];
+    return selectedPlace?.formattedAddress || selectedPlace?.displayName || '';
+  };
+
   const getSuggestionPrimaryText = (suggestion) => {
     return suggestion.placePrediction?.mainText?.text
       || suggestion.placePrediction?.text?.text
@@ -210,6 +222,11 @@ function setupPlaceAutocomplete(controller, fieldName) {
   };
 
   const applyResolvedPlace = async (suggestion) => {
+    requestId += 1;
+    window.clearTimeout(debounceTimer);
+    suppressFetchUntil = Date.now() + 300;
+    closePopup();
+
     const place = suggestion.placePrediction.toPlace();
     await place.fetchFields({
       fields: ['displayName', 'formattedAddress', 'location'],
@@ -219,7 +236,6 @@ function setupPlaceAutocomplete(controller, fieldName) {
     routeParams[fieldName] = place.formattedAddress || place.displayName || getSuggestionPrimaryText(suggestion);
     controller.updateDisplay();
     sessionToken = null;
-    closePopup();
   };
 
   const renderSuggestions = () => {
@@ -261,6 +277,21 @@ function setupPlaceAutocomplete(controller, fieldName) {
     routeParams[fieldName] = input.value;
     clearSelectionIfEditing();
 
+    if (routePlaces[fieldName]) {
+      closePopup();
+      return;
+    }
+
+    if (Date.now() < suppressFetchUntil) {
+      closePopup();
+      return;
+    }
+
+    if (routePlaces[fieldName] && query === getSelectedPlaceLabel()) {
+      closePopup();
+      return;
+    }
+
     if (query.length < 3) {
       closePopup();
       return;
@@ -301,6 +332,11 @@ function setupPlaceAutocomplete(controller, fieldName) {
 
   input.addEventListener('input', scheduleFetch);
   input.addEventListener('focus', () => {
+    if (routePlaces[fieldName]) {
+      closePopup();
+      return;
+    }
+
     if (popup.childElementCount > 0) {
       openPopup();
     }
@@ -309,7 +345,7 @@ function setupPlaceAutocomplete(controller, fieldName) {
     blurTimer = window.setTimeout(closePopup, 120);
   });
   input.addEventListener('keydown', (event) => {
-    if (popup.hidden || suggestions.length === 0) {
+    if (popup.classList.contains('is-hidden') || suggestions.length === 0) {
       return;
     }
 
@@ -340,7 +376,7 @@ function setupPlaceAutocomplete(controller, fieldName) {
   });
 
   window.addEventListener('resize', () => {
-    if (!popup.hidden) {
+    if (!popup.classList.contains('is-hidden')) {
       positionPopup();
     }
   });

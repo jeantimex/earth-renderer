@@ -18,9 +18,29 @@ canvas {
   height: 100%;
 }
 
+.lil-gui .controller.route-field {
+  display: block;
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 8px;
+}
+
+.lil-gui .controller.route-field .name {
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.lil-gui .controller.route-field .widget {
+  width: 100%;
+}
+
+.lil-gui .controller.route-field input {
+  width: 100%;
+}
+
 .autocomplete-popup {
   position: fixed;
-  z-index: 1000;
+  z-index: 10000;
   display: grid;
   gap: 4px;
   padding: 6px;
@@ -29,6 +49,10 @@ canvas {
   background: rgba(20, 26, 29, 0.96);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(10px);
+}
+
+.autocomplete-popup.is-hidden {
+  display: none;
 }
 
 .autocomplete-item {

@@ -14,6 +14,8 @@ let routesLibrary;
 const params = {
   tiltAngle: 70, // degrees (0 = top-down, 90 = horizontal)
   distanceFromCenter: 800, // meters (3D distance from target center)
+  showGoogleTiles: true,
+  showExtractedMeshes: false,
 };
 
 const routeParams = {
@@ -164,6 +166,19 @@ function setupGUI() {
   setupPlaceAutocomplete(originController, 'origin');
   setupPlaceAutocomplete(destinationController, 'destination');
   routeFolder.open();
+
+  const displayFolder = gui.addFolder('Display');
+  displayFolder.add(params, 'showGoogleTiles')
+    .name('Google Tiles')
+    .onChange((value) => {
+      globe.setGoogleTilesVisible(value);
+    });
+  displayFolder.add(params, 'showExtractedMeshes')
+    .name('Extracted Meshes')
+    .onChange((value) => {
+      globe.setExtractedMeshesVisible(value);
+    });
+  displayFolder.open();
 
   const cameraFolder = gui.addFolder('Camera Settings');
 

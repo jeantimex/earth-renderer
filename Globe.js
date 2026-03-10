@@ -47,7 +47,12 @@ export class Globe {
     // Control activation tracking
     this._initialInteractionPerformed = false;
     this.routeGroup = new Group();
+    this.extractedMeshGroup = new Group();
     this.scene.add(this.routeGroup);
+    this.scene.add(this.extractedMeshGroup);
+    this.showGoogleTiles = true;
+    this.showExtractedMeshes = false;
+    this.extractedTileGroups = new WeakMap();
     this.routeRaycaster = new Raycaster();
     this.routeRaycaster.firstHitOnly = true;
     this.routeSurfaceOffset = 12;
@@ -58,6 +63,9 @@ export class Globe {
     // Initialize tiles and controls
     this.initializeTiles();
     this.initializeControls(disableControls);
+    this.initializeMeshExtraction();
+    this.setGoogleTilesVisible(this.showGoogleTiles);
+    this.setExtractedMeshesVisible(this.showExtractedMeshes);
   }
 
   initializeTiles() {
@@ -135,6 +143,112 @@ export class Globe {
     }
   }
 
+  initializeMeshExtraction() {
+    this._onLoadModel = ({ scene, tile }) => {
+      this.captureTileMeshes(scene, tile);
+    };
+
+    this._onDisposeModel = ({ tile }) => {
+      this.disposeExtractedTile(tile);
+    };
+
+    this.tiles.addEventListener('load-model', this._onLoadModel);
+    this.tiles.addEventListener('dispose-model', this._onDisposeModel);
+  }
+
+  setGoogleTilesVisible(visible) {
+    this.showGoogleTiles = visible;
+    this.tiles.group.visible = visible;
+  }
+
+  setExtractedMeshesVisible(visible) {
+    this.showExtractedMeshes = visible;
+    if (visible) {
+      this.refreshExtractedMeshes();
+    }
+    this.extractedMeshGroup.visible = visible;
+  }
+
+  refreshExtractedMeshes() {
+    this.tiles.forEachLoadedModel((scene, tile) => {
+      this.captureTileMeshes(scene, tile);
+    });
+  }
+
+  captureTileMeshes(tileScene, tile) {
+    this.disposeExtractedTile(tile);
+
+    tileScene.updateWorldMatrix(true, true);
+
+    const extractedRoot = new Group();
+    extractedRoot.matrixAutoUpdate = false;
+    extractedRoot.matrix.copy(tileScene.matrixWorld);
+    extractedRoot.matrix.decompose(
+      extractedRoot.position,
+      extractedRoot.quaternion,
+      extractedRoot.scale
+    );
+
+    // Clone meshes with wireframe material
+    tileScene.traverse((object) => {
+      if (!object.isMesh) {
+        return;
+      }
+
+      const wireframeMesh = new Mesh(
+        object.geometry.clone(),
+        new MeshBasicMaterial({
+          color: 0x00ffff,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.6,
+        })
+      );
+
+      wireframeMesh.matrixAutoUpdate = false;
+      wireframeMesh.matrix.copy(object.matrixWorld);
+      wireframeMesh.matrix.decompose(
+        wireframeMesh.position,
+        wireframeMesh.quaternion,
+        wireframeMesh.scale
+      );
+      wireframeMesh.frustumCulled = false;
+
+      extractedRoot.add(wireframeMesh);
+    });
+
+    if (extractedRoot.children.length === 0) {
+      return;
+    }
+
+    this.extractedTileGroups.set(tile, extractedRoot);
+    this.extractedMeshGroup.add(extractedRoot);
+  }
+
+  disposeExtractedTile(tile) {
+    const tileGroup = this.extractedTileGroups.get(tile);
+    if (!tileGroup) {
+      return;
+    }
+
+    tileGroup.traverse((object) => {
+      if (!object.isMesh) {
+        return;
+      }
+
+      object.geometry?.dispose();
+
+      if (Array.isArray(object.material)) {
+        object.material.forEach((material) => material.dispose());
+      } else {
+        object.material?.dispose();
+      }
+    });
+
+    this.extractedMeshGroup.remove(tileGroup);
+    this.extractedTileGroups.delete(tile);
+  }
+
   /**
    * Position camera to look at target center
    * @param {number} distanceFromCenter - 3D distance from target center in meters
@@ -205,9 +319,18 @@ export class Globe {
   }
 
   clearRoutes() {
-    this.routeGroup.children.forEach((routeLine) => {
-      routeLine.geometry.dispose();
-      routeLine.material.dispose();
+    this.routeGroup.traverse((object) => {
+      if (!object.isMesh) {
+        return;
+      }
+
+      object.geometry?.dispose();
+
+      if (Array.isArray(object.material)) {
+        object.material.forEach((material) => material.dispose());
+      } else {
+        object.material?.dispose();
+      }
     });
     this.routeGroup.clear();
   }
@@ -427,6 +550,12 @@ export class Globe {
   dispose() {
     this.clearRoutes();
     this.scene.remove(this.routeGroup);
+    this.tiles.removeEventListener('load-model', this._onLoadModel);
+    this.tiles.removeEventListener('dispose-model', this._onDisposeModel);
+    this.tiles.traverse((tile) => {
+      this.disposeExtractedTile(tile);
+    }, null, false);
+    this.scene.remove(this.extractedMeshGroup);
 
     if (this.tiles) {
       this.scene.remove(this.tiles.group);

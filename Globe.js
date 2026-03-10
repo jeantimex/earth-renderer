@@ -8,8 +8,26 @@ import {
   GLTFExtensionsPlugin,
   UpdateOnChangePlugin,
 } from '3d-tiles-renderer/plugins';
-import { MathUtils, Vector3 } from 'three';
+import {
+  CatmullRomCurve3,
+  Color,
+  Group,
+  MathUtils,
+  Mesh,
+  MeshBasicMaterial,
+  Raycaster,
+  SphereGeometry,
+  TubeGeometry,
+  Vector3,
+} from 'three';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+
+const _globeCenter = new Vector3();
+const _cameraForward = new Vector3();
+const _cameraToCenter = new Vector3();
+const _surfaceNormal = new Vector3();
+const _rayOrigin = new Vector3();
+const _snappedPoint = new Vector3();
 
 /**
  * Globe class encapsulates the 3D tiles renderer and controls for viewing Earth
@@ -28,6 +46,14 @@ export class Globe {
 
     // Control activation tracking
     this._initialInteractionPerformed = false;
+    this.routeGroup = new Group();
+    this.scene.add(this.routeGroup);
+    this.routeRaycaster = new Raycaster();
+    this.routeRaycaster.firstHitOnly = true;
+    this.routeSurfaceOffset = 12;
+    this.routeRaycastOffset = 80;
+    this.routeRaycastFar = 200;
+    this.routeMaxStepHeight = 18;
 
     // Initialize tiles and controls
     this.initializeTiles();
@@ -173,6 +199,212 @@ export class Globe {
 
     // Update tiles rendering
     this.tiles.update();
+
+    // Fade the x-ray pass out in top-down views.
+    this.updateRouteXRayOpacity();
+  }
+
+  clearRoutes() {
+    this.routeGroup.children.forEach((routeLine) => {
+      routeLine.geometry.dispose();
+      routeLine.material.dispose();
+    });
+    this.routeGroup.clear();
+  }
+
+  drawRoutes(routes) {
+    this.clearRoutes();
+    this.tiles.group.updateMatrixWorld();
+
+    console.log('drawRoutes input:', routes);
+
+    routes.forEach((route, index) => {
+      if (!Array.isArray(route?.path) || route.path.length < 2) {
+        console.warn('Skipping route with missing path.', { index, path: route?.path });
+        return;
+      }
+
+      const points = this.stabilizeRoutePoints(route.path
+        .map((point) => this.getRouteWorldPosition(point))
+        .filter(Boolean));
+
+      console.log('drawRoutes converted points:', {
+        index,
+        pathLength: route.path.length,
+        pointCount: points.length,
+        firstPoint: points[0],
+        lastPoint: points[points.length - 1],
+      });
+
+      if (points.length < 2) {
+        return;
+      }
+
+      const routeColor = index === 0 ? 0x7ad7ff : 0xffb347;
+      const routeLine = this.createRouteTube(points, routeColor);
+      this.routeGroup.add(routeLine);
+
+      this.routeGroup.add(this.createRouteMarker(points[0], 0x00ffcc));
+      this.routeGroup.add(this.createRouteMarker(points[points.length - 1], 0xff8844));
+    });
+  }
+
+  createRouteTube(points, color) {
+    const curve = new CatmullRomCurve3(points);
+    const geometry = new TubeGeometry(curve, Math.max(points.length * 2, 64), 6, 10, false);
+    const material = new MeshBasicMaterial({
+      color: new Color(color),
+      depthTest: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const xrayMaterial = new MeshBasicMaterial({
+      color: new Color(color),
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    const routeGroup = new Group();
+
+    const routeMesh = new Mesh(geometry, material);
+    routeMesh.frustumCulled = false;
+    routeGroup.add(routeMesh);
+
+    const xrayRouteMesh = new Mesh(geometry.clone(), xrayMaterial);
+    xrayRouteMesh.frustumCulled = false;
+    xrayRouteMesh.renderOrder = 1000;
+    xrayRouteMesh.userData.isRouteXRay = true;
+    xrayRouteMesh.userData.baseOpacity = 0.85;
+    routeGroup.add(xrayRouteMesh);
+
+    return routeGroup;
+  }
+
+  updateRouteXRayOpacity() {
+    _globeCenter.setFromMatrixPosition(this.tiles.group.matrixWorld);
+    _cameraForward.set(0, 0, -1).transformDirection(this.camera.matrixWorld);
+    _cameraToCenter.subVectors(_globeCenter, this.camera.position).normalize();
+
+    const alignment = Math.max(0, _cameraForward.dot(_cameraToCenter));
+    const xrayOpacity = alignment > 0.94
+      ? 0.35
+      : MathUtils.mapLinear(alignment, 0.7, 0.94, 0.85, 0.35);
+
+    this.routeGroup.traverse((object) => {
+      if (!object.userData?.isRouteXRay) {
+        return;
+      }
+
+      object.material.opacity = Math.max(0, Math.min(object.userData.baseOpacity, xrayOpacity));
+      object.visible = object.material.opacity > 0.001;
+    });
+  }
+
+  createRouteMarker(position, color) {
+    const marker = new Mesh(
+      new SphereGeometry(20, 16, 16),
+      new MeshBasicMaterial({
+        color,
+        depthTest: true,
+        depthWrite: false,
+      })
+    );
+    marker.position.copy(position);
+    return marker;
+  }
+
+  cartographicToWorldPosition(point) {
+    const lat = this.getCoordinateValue(point, 'lat');
+    const lng = this.getCoordinateValue(point, 'lng');
+
+    if (lat == null || lng == null) {
+      return null;
+    }
+
+    const altitude = 0;
+    const position = new Vector3();
+    WGS84_ELLIPSOID.getCartographicToPosition(
+      lat * MathUtils.DEG2RAD,
+      lng * MathUtils.DEG2RAD,
+      altitude,
+      position
+    );
+    return position.applyMatrix4(this.tiles.group.matrixWorld);
+  }
+
+  getRouteWorldPosition(point) {
+    const fallbackPosition = this.cartographicToWorldPosition(point);
+    if (!fallbackPosition) {
+      return null;
+    }
+
+    return this.snapRoutePointToTiles(fallbackPosition);
+  }
+
+  snapRoutePointToTiles(fallbackPosition) {
+    _globeCenter.setFromMatrixPosition(this.tiles.group.matrixWorld);
+    _surfaceNormal.subVectors(fallbackPosition, _globeCenter).normalize();
+    _rayOrigin.copy(fallbackPosition).addScaledVector(_surfaceNormal, this.routeRaycastOffset);
+
+    this.routeRaycaster.near = 0;
+    this.routeRaycaster.far = this.routeRaycastFar;
+    this.routeRaycaster.set(_rayOrigin, _surfaceNormal.clone().negate());
+
+    const intersections = this.routeRaycaster.intersectObject(this.tiles.group, true);
+    if (intersections.length === 0) {
+      return fallbackPosition;
+    }
+
+    return _snappedPoint
+      .copy(intersections[0].point)
+      .addScaledVector(_surfaceNormal, this.routeSurfaceOffset)
+      .clone();
+  }
+
+  stabilizeRoutePoints(points) {
+    if (points.length < 3) {
+      return points;
+    }
+
+    const clamped = points.map((point) => point.clone());
+
+    for (let i = 1; i < clamped.length; i += 1) {
+      const previous = clamped[i - 1];
+      const current = clamped[i];
+      const previousHeight = previous.distanceTo(_globeCenter);
+      const currentHeight = current.distanceTo(_globeCenter);
+      const heightDelta = currentHeight - previousHeight;
+
+      if (Math.abs(heightDelta) <= this.routeMaxStepHeight) {
+        continue;
+      }
+
+      _surfaceNormal.copy(current).sub(_globeCenter).normalize();
+      current.addScaledVector(
+        _surfaceNormal,
+        Math.sign(previousHeight - currentHeight) * (Math.abs(heightDelta) - this.routeMaxStepHeight)
+      );
+    }
+
+    const smoothed = clamped.map((point) => point.clone());
+    for (let i = 1; i < clamped.length - 1; i += 1) {
+      smoothed[i]
+        .copy(clamped[i - 1])
+        .add(clamped[i])
+        .add(clamped[i + 1])
+        .multiplyScalar(1 / 3);
+    }
+
+    return smoothed;
+  }
+
+  getCoordinateValue(point, key) {
+    const value = point?.[key];
+    return typeof value === 'number' ? value : null;
   }
 
   /**
@@ -193,6 +425,9 @@ export class Globe {
    * Dispose of resources
    */
   dispose() {
+    this.clearRoutes();
+    this.scene.remove(this.routeGroup);
+
     if (this.tiles) {
       this.scene.remove(this.tiles.group);
       this.tiles.dispose();

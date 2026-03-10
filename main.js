@@ -19,6 +19,9 @@ const params = {
 const routeParams = {
   origin: '',
   destination: '',
+  getRoutes: () => {
+    void fetchAndRenderRoutes();
+  },
 };
 
 const routePlaces = {
@@ -93,6 +96,59 @@ async function initializeGoogleMapsLibraries(apiKey) {
   routesLibrary = await google.maps.importLibrary('routes');
 }
 
+async function fetchAndRenderRoutes() {
+  if (!routePlaces.origin?.location || !routePlaces.destination?.location) {
+    console.warn('Select both an origin and a destination before requesting routes.');
+    return;
+  }
+
+  try {
+    const { Route } = routesLibrary;
+    const response = await Route.computeRoutes({
+      origin: { location: routePlaces.origin.location },
+      destination: { location: routePlaces.destination.location },
+      travelMode: 'DRIVING',
+      fields: ['path'],
+    });
+
+    console.log('computeRoutes response:', response);
+    console.log('computeRoutes paths:', response.routes?.map((route, index) => ({
+      index,
+      pathLength: route.path?.length ?? 0,
+      path: route.path,
+    })));
+
+    if (!response.routes?.length) {
+      console.warn('No driving routes were returned for the selected places.');
+      globe.clearRoutes();
+      return;
+    }
+
+    const elevatedRoutes = await Promise.all(
+      response.routes.map(async (route) => ({
+        ...route,
+        path: await applyTerrainElevationToPath(route.path || []),
+      }))
+    );
+
+    globe.drawRoutes(elevatedRoutes);
+  } catch (error) {
+    console.error('Failed to compute routes.', error);
+    globe.clearRoutes();
+  }
+}
+
+async function applyTerrainElevationToPath(path) {
+  if (path.length === 0) {
+    return path;
+  }
+
+  return path.map((point) => ({
+    lat: point.lat,
+    lng: point.lng,
+  }));
+}
+
 function setupGUI() {
   const gui = new GUI();
   gui.width = 340;
@@ -100,6 +156,7 @@ function setupGUI() {
   const routeFolder = gui.addFolder('Route Search');
   const originController = routeFolder.add(routeParams, 'origin').name('Origin');
   const destinationController = routeFolder.add(routeParams, 'destination').name('Destination');
+  routeFolder.add(routeParams, 'getRoutes').name('Get Routes');
 
   originController.domElement.classList.add('route-field');
   destinationController.domElement.classList.add('route-field');

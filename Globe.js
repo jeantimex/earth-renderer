@@ -144,16 +144,14 @@ export class Globe {
   }
 
   initializeMeshExtraction() {
-    this._onLoadModel = ({ scene, tile }) => {
+    // Use property callbacks for tile lifecycle events
+    this.tiles.onLoadModel = (scene, tile) => {
       this.captureTileMeshes(scene, tile);
     };
 
-    this._onDisposeModel = ({ tile }) => {
+    this.tiles.onDisposeModel = (scene, tile) => {
       this.disposeExtractedTile(tile);
     };
-
-    this.tiles.addEventListener('load-model', this._onLoadModel);
-    this.tiles.addEventListener('dispose-model', this._onDisposeModel);
   }
 
   setGoogleTilesVisible(visible) {
@@ -165,6 +163,10 @@ export class Globe {
     this.showExtractedMeshes = visible;
     if (visible) {
       this.refreshExtractedMeshes();
+    } else {
+      // Clear extracted meshes when not visible to save memory
+      this.extractedTileGroups = new WeakMap();
+      this.extractedMeshGroup.clear();
     }
     this.extractedMeshGroup.visible = visible;
   }
@@ -178,16 +180,16 @@ export class Globe {
   captureTileMeshes(tileScene, tile) {
     this.disposeExtractedTile(tile);
 
+    // Only extract meshes if the feature is enabled
+    if (!this.showExtractedMeshes) {
+      return;
+    }
+
     tileScene.updateWorldMatrix(true, true);
 
     const extractedRoot = new Group();
+    // Use identity matrix for the root to simplify child positioning
     extractedRoot.matrixAutoUpdate = false;
-    extractedRoot.matrix.copy(tileScene.matrixWorld);
-    extractedRoot.matrix.decompose(
-      extractedRoot.position,
-      extractedRoot.quaternion,
-      extractedRoot.scale
-    );
 
     // Clone meshes with wireframe material
     tileScene.traverse((object) => {
@@ -205,13 +207,9 @@ export class Globe {
         })
       );
 
+      // Copy the world matrix of the original mesh
       wireframeMesh.matrixAutoUpdate = false;
       wireframeMesh.matrix.copy(object.matrixWorld);
-      wireframeMesh.matrix.decompose(
-        wireframeMesh.position,
-        wireframeMesh.quaternion,
-        wireframeMesh.scale
-      );
       wireframeMesh.frustumCulled = false;
 
       extractedRoot.add(wireframeMesh);
@@ -223,6 +221,9 @@ export class Globe {
 
     this.extractedTileGroups.set(tile, extractedRoot);
     this.extractedMeshGroup.add(extractedRoot);
+
+    // Sync initial visibility
+    extractedRoot.visible = tileScene.visible;
   }
 
   disposeExtractedTile(tile) {
@@ -247,6 +248,25 @@ export class Globe {
 
     this.extractedMeshGroup.remove(tileGroup);
     this.extractedTileGroups.delete(tile);
+  }
+
+  /**
+   * Sync visibility of extracted meshes with their source tiles
+   */
+  updateExtractedMeshes() {
+    if (!this.showExtractedMeshes) {
+      return;
+    }
+
+    this.tiles.forEachLoadedModel((scene, tile) => {
+      const extractedRoot = this.extractedTileGroups.get(tile);
+      if (extractedRoot) {
+        extractedRoot.visible = scene.visible;
+      } else {
+        // If it's loaded but not yet extracted (e.g. feature just enabled), extract it now
+        this.captureTileMeshes(scene, tile);
+      }
+    });
   }
 
   /**
@@ -313,6 +333,9 @@ export class Globe {
 
     // Update tiles rendering
     this.tiles.update();
+
+    // Sync extracted meshes visibility and state
+    this.updateExtractedMeshes();
 
     // Fade the x-ray pass out in top-down views.
     this.updateRouteXRayOpacity();
@@ -550,16 +573,18 @@ export class Globe {
   dispose() {
     this.clearRoutes();
     this.scene.remove(this.routeGroup);
-    this.tiles.removeEventListener('load-model', this._onLoadModel);
-    this.tiles.removeEventListener('dispose-model', this._onDisposeModel);
-    this.tiles.traverse((tile) => {
-      this.disposeExtractedTile(tile);
-    }, null, false);
-    this.scene.remove(this.extractedMeshGroup);
 
+    // Clean up tile lifecycle callbacks
     if (this.tiles) {
+      this.tiles.onLoadModel = null;
+      this.tiles.onDisposeModel = null;
+      this.tiles.traverse((tile) => {
+        this.disposeExtractedTile(tile);
+      }, null, false);
       this.scene.remove(this.tiles.group);
       this.tiles.dispose();
     }
+
+    this.scene.remove(this.extractedMeshGroup);
   }
 }

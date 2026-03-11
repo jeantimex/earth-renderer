@@ -12,6 +12,7 @@ import {
   CatmullRomCurve3,
   Color,
   Group,
+  InstancedMesh,
   MathUtils,
   Mesh,
   MeshBasicMaterial,
@@ -188,29 +189,52 @@ export class Globe {
     tileScene.updateWorldMatrix(true, true);
 
     const extractedRoot = new Group();
-    // Use identity matrix for the root to simplify child positioning
+    // Identity matrix for the root group; children use world matrices
     extractedRoot.matrixAutoUpdate = false;
 
-    // Clone meshes with wireframe material
+    // Use a single material for all wireframes in this tile to save memory
+    const wireframeMaterial = new MeshBasicMaterial({
+      color: 0x00ffff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.8,
+      depthTest: true,
+      depthWrite: false, // Prevents wireframes from occluding each other
+    });
+
     tileScene.traverse((object) => {
-      if (!object.isMesh) {
+      // ONLY capture meshes that are currently visible and have geometry
+      // This filters out hidden low-poly collision/proxy meshes which cause "sparse" wireframes
+      if (!object.isMesh || !object.visible || !object.geometry) {
         return;
       }
 
-      const wireframeMesh = new Mesh(
-        object.geometry.clone(),
-        new MeshBasicMaterial({
-          color: 0x00ffff,
-          wireframe: true,
-          transparent: true,
-          opacity: 0.6,
-        })
-      );
+      // Check for empty geometry
+      if (object.geometry.attributes.position?.count === 0) {
+        return;
+      }
 
-      // Copy the world matrix of the original mesh
+      let wireframeMesh;
+      if (object.isInstancedMesh) {
+        // Handle instancing for objects like trees to avoid "missing" geometry
+        wireframeMesh = new InstancedMesh(
+          object.geometry, // Share the geometry to preserve Draco quantization/offsets
+          wireframeMaterial,
+          object.count
+        );
+        wireframeMesh.instanceMatrix.copy(object.instanceMatrix);
+        if (object.instanceColor) {
+          wireframeMesh.instanceColor = object.instanceColor.clone();
+        }
+      } else {
+        // Standard mesh; share geometry to save memory and stay "truthful" to the original
+        wireframeMesh = new Mesh(object.geometry, wireframeMaterial);
+      }
+
+      // Copy the world matrix to ensure correct alignment with the 3D tile
       wireframeMesh.matrixAutoUpdate = false;
       wireframeMesh.matrix.copy(object.matrixWorld);
-      wireframeMesh.frustumCulled = false;
+      wireframeMesh.frustumCulled = false; // Always render if the tile is in view
 
       extractedRoot.add(wireframeMesh);
     });
@@ -222,7 +246,7 @@ export class Globe {
     this.extractedTileGroups.set(tile, extractedRoot);
     this.extractedMeshGroup.add(extractedRoot);
 
-    // Sync initial visibility
+    // Sync initial visibility with the tile's visibility state
     extractedRoot.visible = tileScene.visible;
   }
 
@@ -237,12 +261,16 @@ export class Globe {
         return;
       }
 
-      object.geometry?.dispose();
-
+      // IMPORTANT: DO NOT dispose object.geometry here! 
+      // It is shared with the original 3D tiles renderer.
+      // The renderer handles geometry lifecycle; we just clean up our meshes and materials.
       if (Array.isArray(object.material)) {
-        object.material.forEach((material) => material.dispose());
-      } else {
-        object.material?.dispose();
+        // Materials are ours; safe to dispose
+        object.material.forEach((material) => {
+          if (material !== this.wireframeMaterial) material.dispose();
+        });
+      } else if (object.material && object.material !== this.wireframeMaterial) {
+        object.material.dispose();
       }
     });
 
@@ -251,7 +279,7 @@ export class Globe {
   }
 
   /**
-   * Sync visibility of extracted meshes with their source tiles
+   * Sync visibility and matrices of extracted meshes with their source tiles
    */
   updateExtractedMeshes() {
     if (!this.showExtractedMeshes) {
@@ -261,9 +289,24 @@ export class Globe {
     this.tiles.forEachLoadedModel((scene, tile) => {
       const extractedRoot = this.extractedTileGroups.get(tile);
       if (extractedRoot) {
+        // Sync visibility (LOD and frustum state)
         extractedRoot.visible = scene.visible;
+
+        // Sync matrices in case the renderer shifted tiles for precision
+        // Note: For Google 3D Tiles this is rarely needed every frame, 
+        // but it ensures the wireframe stays perfectly aligned with the textured surface.
+        let meshIndex = 0;
+        scene.traverse((object) => {
+          if (object.isMesh && object.visible && object.geometry) {
+            const wireframeMesh = extractedRoot.children[meshIndex];
+            if (wireframeMesh) {
+              wireframeMesh.matrix.copy(object.matrixWorld);
+            }
+            meshIndex += 1;
+          }
+        });
       } else {
-        // If it's loaded but not yet extracted (e.g. feature just enabled), extract it now
+        // If it's loaded but not yet extracted, extract it now
         this.captureTileMeshes(scene, tile);
       }
     });
